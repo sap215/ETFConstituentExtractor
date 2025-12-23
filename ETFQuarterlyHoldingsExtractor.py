@@ -102,9 +102,9 @@ class NPORTPScraper:
                         investment_data["Name of Issuer"] = issuer_name.find_next_sibling('td').get_text(strip=True)
 
                     # Extract the CUSIP for the issuer
-                    cusip = c1_table.find('td', string=lambda text: text and 'd. CUSIP (if any)' in text)
-                    if cusip is not None:
-                        investment_data["CUSIP"] = cusip.find_next_sibling('td').get_text(strip=True)
+                    # cusip = c1_table.find('td', string=lambda text: text and 'd. CUSIP (if any)' in text)
+                    # if cusip is not None:
+                    #     investment_data["CUSIP"] = cusip.find_next_sibling('td').get_text(strip=True)
             
             # Extract the 'Item C.2. Amount of each investment' table to find the number of shares (balance), value in USD, and percentage of net assets
             c2 = investment.find_next('h4', string=lambda text: text and 'Item C.2. Amount of each investment' in text)
