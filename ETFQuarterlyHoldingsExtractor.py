@@ -10,14 +10,14 @@ class NPORTPScraper:
 
         # Headers for the base API request
         self.base_headers = {
-            "User-Agent": "Firstname Lastname your_email@example.com", # REPLACE WITH YOUR OWN INFORMATION
+            "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
             "Accept-Encoding": "gzip, deflate",
             "Host": "data.sec.gov"
         }
         
         # Headers for individual NPORT-P filings
         self.nportp_headers = {
-            "User-Agent": "Firstname Lastname your_email@example.com", # REPLACE WITH YOUR OWN INFORMATION
+            "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "application/xml",
             "Priority": "u=0, i",
