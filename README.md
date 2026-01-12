@@ -29,6 +29,23 @@ Install the required dependencies:
 pip install -r requirements.txt
 ```
 
+### Configuration
+
+Create a `.env` file in the project root directory with your contact information. This is required by the SEC EDGAR policy:
+
+```bash
+cp .env.template .env
+```
+
+Edit `.env` and replace with your actual name and email:
+
+```.env
+USER_NAME=Your Full Name
+USER_EMAIL=your.email@example.com
+```
+
+The script uses this information to set the User-Agent header for all SEC API requests.
+
 ### Running the Script
 
 **Option 1: Command-line argument (recommended)**

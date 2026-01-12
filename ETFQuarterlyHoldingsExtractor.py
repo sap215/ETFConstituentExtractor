@@ -7,7 +7,13 @@ import os
 import time
 import sys
 import sqlite3
+from dotenv import load_dotenv
 from requests.exceptions import SSLError, ConnectionError, Timeout, RequestException
+
+load_dotenv()
+USER_NAME = os.getenv('USER_NAME', 'User')
+USER_EMAIL = os.getenv('USER_EMAIL', 'user@example.com')
+USER_AGENT = f"{USER_NAME} {USER_EMAIL}"
 
 class NPORTPScraper:
     def __init__(self, etf_cik):
@@ -16,14 +22,14 @@ class NPORTPScraper:
 
         # Headers for the base API request
         self.base_headers = {
-            "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
+            "User-Agent": USER_AGENT,
             "Accept-Encoding": "gzip, deflate",
             "Host": "data.sec.gov"
         }
 
         # Headers for individual NPORT-P filings
         self.nportp_headers = {
-            "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
+            "User-Agent": USER_AGENT,
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "application/xml",
             "Priority": "u=0, i",
