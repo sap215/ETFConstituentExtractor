@@ -1,7 +1,19 @@
-# Imports
+#!/usr/bin/env python3
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
+import json
+import os
+import time
+import sys
+import sqlite3
+from dotenv import load_dotenv
+from requests.exceptions import SSLError, ConnectionError, Timeout, RequestException
+
+load_dotenv()
+USER_NAME = os.getenv('USER_NAME', 'User')
+USER_EMAIL = os.getenv('USER_EMAIL', 'user@example.com')
+USER_AGENT = f"{USER_NAME} {USER_EMAIL}"
 
 class NPORTPScraper:
     def __init__(self, etf_cik):
@@ -10,14 +22,14 @@ class NPORTPScraper:
 
         # Headers for the base API request
         self.base_headers = {
-            "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
+            "User-Agent": USER_AGENT,
             "Accept-Encoding": "gzip, deflate",
             "Host": "data.sec.gov"
         }
-        
+
         # Headers for individual NPORT-P filings
         self.nportp_headers = {
-            "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
+            "User-Agent": USER_AGENT,
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "application/xml",
             "Priority": "u=0, i",
@@ -26,18 +38,64 @@ class NPORTPScraper:
         }
 
         self.master_df_list = {}
+        self.output_dir = os.path.join("output", self.etf_cik)
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.progress_file = os.path.join(self.output_dir, "progress.json")
+        self.processed_filings = self.load_progress()
+
+    def load_progress(self):
+        """ FUNCTION DESCRIPTION:
+        Load the list of already processed filings from the progress file.
+        """
+        if os.path.exists(self.progress_file):
+            try:
+                with open(self.progress_file, 'r') as f:
+                    data = json.load(f)
+                    print(f"Loaded progress: {len(data.get('processed', []))} filings already processed")
+                    return set(data.get('processed', []))
+            except Exception as e:
+                print(f"Error loading progress file: {e}")
+                return set()
+        return set()
+
+    def save_progress(self, accession_number):
+        """ FUNCTION DESCRIPTION:
+        Save a processed filing accession number to the progress file.
+        """
+        self.processed_filings.add(accession_number)
+        try:
+            with open(self.progress_file, 'w') as f:
+                json.dump({'processed': list(self.processed_filings)}, f, indent=2)
+        except Exception as e:
+            print(f"Error saving progress: {e}")
 
     def fetch_submission_data(self):
         """ FUNCTION DESCRIPTION:
         Fetch the original submission data from the SEC API.
         """
         print(f"Fetching data from {self.base_url}")
-        response = requests.get(self.base_url, headers=self.base_headers)
-        if response.status_code != 200:
-            print(f"Failed to fetch submission data: {response.status_code}")
-            return None
-        return response.json()
-    
+
+        # Retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(self.base_url, headers=self.base_headers, timeout=30)
+                if response.status_code != 200:
+                    print(f"Failed to fetch submission data: {response.status_code}")
+                    return None
+                return response.json()
+            except (SSLError, ConnectionError, Timeout) as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 * (2 ** attempt)
+                    print(f"Network error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Failed to fetch submission data after {max_retries} attempts: {type(e).__name__}")
+                    return None
+            except RequestException as e:
+                print(f"Request error: {type(e).__name__}: {str(e)}")
+                return None
+
     def filter_nport_p_filings(self, data):
         """ FUNCTION DESCRIPTION:
         Filter for NPORT-P filings.
@@ -50,17 +108,37 @@ class NPORTPScraper:
             "Primary Document": filings.get("primaryDocument", [])
         })
         return df[df["Form Type"] == "NPORT-P"]
-    
+
     def scrape_filing(self, accession_number, primary_document):
         """ FUNCTION DESCRIPTION:
         Scrape holdings data from an individual NPORT-P filing, given the accession number and primary document URL.
         """
         url = f"https://www.sec.gov/Archives/edgar/data/{self.etf_cik}/{accession_number.replace('-', '')}/{primary_document}"
         print(f"Fetching filing from: {url}")
-        response = requests.get(url, headers=self.nportp_headers)
-        if response.status_code != 200:
-            print(f"Failed to fetch filing: {response.status_code}")
-            return None, None
+
+        # Retry logic with exponential backoff
+        max_retries = 5
+        retry_delay = 2  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, headers=self.nportp_headers, timeout=30)
+                if response.status_code != 200:
+                    print(f"Failed to fetch filing: {response.status_code}")
+                    return None, None
+                break  # Success, exit retry loop
+            except (SSLError, ConnectionError, Timeout) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(f"Network error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Failed after {max_retries} attempts: {type(e).__name__}: {str(e)}")
+                    return None, None
+            except RequestException as e:
+                print(f"Request error: {type(e).__name__}: {str(e)}")
+                return None, None
+
         soup = BeautifulSoup(response.content, 'html.parser')
 
         # Extract the reporting date from the filing
@@ -75,12 +153,12 @@ class NPORTPScraper:
                     if date_section is not None:
                         reporting_date = date_section.find_next_sibling('td').get_text(strip=True)
                         break
-        
+
         # If the reporting date is not found, return None
         if not reporting_date:
             print("Failed to extract reporting date from the filing.")
             return None, None
-        
+
         holdings_data = []
 
         # Extract the investment sections (each section represents a different holding)
@@ -105,7 +183,7 @@ class NPORTPScraper:
                     # cusip = c1_table.find('td', string=lambda text: text and 'd. CUSIP (if any)' in text)
                     # if cusip is not None:
                     #     investment_data["CUSIP"] = cusip.find_next_sibling('td').get_text(strip=True)
-            
+
             # Extract the 'Item C.2. Amount of each investment' table to find the number of shares (balance), value in USD, and percentage of net assets
             c2 = investment.find_next('h4', string=lambda text: text and 'Item C.2. Amount of each investment' in text)
             c2_table = c2.find_next('table')
@@ -130,17 +208,60 @@ class NPORTPScraper:
                 holdings_data.append(investment_data)
         holdings_df = pd.DataFrame(holdings_data)
         return holdings_df, reporting_date
-        
 
-
-    def save_holdings(self):
+    def create_database(self):
         """ FUNCTION DESCRIPTION:
-        Save all of the extracted holdings to CSV files (each file corresponds to a NPORT-P filing).
+        Combine all CSV files into a SQLite database with a reporting_date column.
         """
-        for date, df in self.master_df_list.items():
-            filename = f"{date}_NPORT-P_HOLDINGS.csv"
-            print(f"Saving {filename}")
-            df.to_csv(filename, index=False)
+        db_path = os.path.join(self.output_dir, f"holdings.db")
+        print(f"\nCreating SQLite database: {db_path}")
+
+        # Connect to SQLite database
+        conn = sqlite3.connect(db_path)
+
+        # Get all CSV files in the output directory
+        csv_files = [f for f in os.listdir(self.output_dir) if f.endswith('_NPORT-P_HOLDINGS.csv')]
+
+        if not csv_files:
+            print("No CSV files found to add to database.")
+            conn.close()
+            return
+
+        # Sort files by date
+        csv_files.sort()
+
+        all_data = []
+        for csv_file in csv_files:
+            # Extract reporting date from filename (format: YYYY-MM-DD_NPORT-P_HOLDINGS.csv)
+            reporting_date = csv_file.split('_NPORT-P_HOLDINGS.csv')[0]
+            csv_path = os.path.join(self.output_dir, csv_file)
+
+            # Read CSV and add reporting_date column
+            df = pd.read_csv(csv_path)
+            df['Reporting Date'] = reporting_date
+            all_data.append(df)
+
+        # Combine all dataframes
+        combined_df = pd.concat(all_data, ignore_index=True)
+
+        # Reorder columns to put Reporting Date first
+        cols = ['Reporting Date'] + [col for col in combined_df.columns if col != 'Reporting Date']
+        combined_df = combined_df[cols]
+
+        # Write to SQLite database
+        combined_df.to_sql('holdings', conn, if_exists='replace', index=False)
+
+        # Create index on reporting date for faster queries
+        cursor = conn.cursor()
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_reporting_date ON holdings("Reporting Date")')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_issuer ON holdings("Name of Issuer")')
+        conn.commit()
+
+        print(f"Database created successfully with {len(combined_df)} total holdings across {len(csv_files)} reporting periods.")
+        print(f"Table: holdings")
+        print(f"Columns: {', '.join(cols)}")
+
+        conn.close()
 
     def run(self):
         """ FUNCTION DESCRIPTION:
@@ -150,16 +271,48 @@ class NPORTPScraper:
         if not data:
             return
         nport_p_filings = self.filter_nport_p_filings(data)
-        for _, row in nport_p_filings.iterrows():
+        total_filings = len(nport_p_filings)
+        print(f"Found {total_filings} NPORT-P filings")
+
+        for idx, row in nport_p_filings.iterrows():
             accession_number = row["Accession Number"]
             primary_document = row["Primary Document"]
+
+            # Skip if already processed
+            if accession_number in self.processed_filings:
+                print(f"Skipping already processed filing: {accession_number}")
+                continue
+
+            print(f"Processing filing {len(self.processed_filings) + 1}/{total_filings}: {accession_number}")
             holdings_df, reporting_date = self.scrape_filing(accession_number, primary_document)
-            if holdings_df is not None:
+            if holdings_df is not None and reporting_date is not None:
                 self.master_df_list[reporting_date] = holdings_df
-        self.save_holdings()
+                # Save this filing immediately
+                filename = f"{reporting_date}_NPORT-P_HOLDINGS.csv"
+                filepath = os.path.join(self.output_dir, filename)
+                print(f"Saving {filepath}")
+                holdings_df.to_csv(filepath, index=False)
+                # Mark as processed
+                self.save_progress(accession_number)
+            else:
+                print(f"Failed to process filing {accession_number}, will retry on next run")
+
+        print("\nProcessing complete!")
+        if len(self.processed_filings) == total_filings:
+            print("All filings have been processed.")
+        else:
+            print(f"Processed {len(self.processed_filings)}/{total_filings} filings. Run again to retry failed filings.")
+
+        # Create SQLite database from all CSV files
+        self.create_database()
 
 def main():
-    etf_cik = input("Enter the 10-digit CIK number for the ETF: ").strip()
+    # Check if CIK was provided as command-line argument
+    if len(sys.argv) > 1:
+        etf_cik = sys.argv[1].strip()
+    else:
+        etf_cik = input("Enter the 10-digit CIK number for the ETF: ").strip()
+
     if not etf_cik.isdigit() or len(etf_cik) != 10:
         print("Invalid CIK number. Please enter a 10-digit numeric CIK.")
         return
