@@ -2,6 +2,10 @@
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
+import json
+import os
+import time
+from requests.exceptions import SSLError, ConnectionError, Timeout, RequestException
 
 class NPORTPScraper:
     def __init__(self, etf_cik):
@@ -26,17 +30,63 @@ class NPORTPScraper:
         }
 
         self.master_df_list = {}
+        self.output_dir = os.path.join("output", self.etf_cik)
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.progress_file = os.path.join(self.output_dir, "progress.json")
+        self.processed_filings = self.load_progress()
+
+    def load_progress(self):
+        """ FUNCTION DESCRIPTION:
+        Load the list of already processed filings from the progress file.
+        """
+        if os.path.exists(self.progress_file):
+            try:
+                with open(self.progress_file, 'r') as f:
+                    data = json.load(f)
+                    print(f"Loaded progress: {len(data.get('processed', []))} filings already processed")
+                    return set(data.get('processed', []))
+            except Exception as e:
+                print(f"Error loading progress file: {e}")
+                return set()
+        return set()
+
+    def save_progress(self, accession_number):
+        """ FUNCTION DESCRIPTION:
+        Save a processed filing accession number to the progress file.
+        """
+        self.processed_filings.add(accession_number)
+        try:
+            with open(self.progress_file, 'w') as f:
+                json.dump({'processed': list(self.processed_filings)}, f, indent=2)
+        except Exception as e:
+            print(f"Error saving progress: {e}")
 
     def fetch_submission_data(self):
         """ FUNCTION DESCRIPTION:
         Fetch the original submission data from the SEC API.
         """
         print(f"Fetching data from {self.base_url}")
-        response = requests.get(self.base_url, headers=self.base_headers)
-        if response.status_code != 200:
-            print(f"Failed to fetch submission data: {response.status_code}")
-            return None
-        return response.json()
+
+        # Retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(self.base_url, headers=self.base_headers, timeout=30)
+                if response.status_code != 200:
+                    print(f"Failed to fetch submission data: {response.status_code}")
+                    return None
+                return response.json()
+            except (SSLError, ConnectionError, Timeout) as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 * (2 ** attempt)
+                    print(f"Network error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Failed to fetch submission data after {max_retries} attempts: {type(e).__name__}")
+                    return None
+            except RequestException as e:
+                print(f"Request error: {type(e).__name__}: {str(e)}")
+                return None
 
     def filter_nport_p_filings(self, data):
         """ FUNCTION DESCRIPTION:
@@ -57,10 +107,30 @@ class NPORTPScraper:
         """
         url = f"https://www.sec.gov/Archives/edgar/data/{self.etf_cik}/{accession_number.replace('-', '')}/{primary_document}"
         print(f"Fetching filing from: {url}")
-        response = requests.get(url, headers=self.nportp_headers)
-        if response.status_code != 200:
-            print(f"Failed to fetch filing: {response.status_code}")
-            return None, None
+
+        # Retry logic with exponential backoff
+        max_retries = 5
+        retry_delay = 2  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, headers=self.nportp_headers, timeout=30)
+                if response.status_code != 200:
+                    print(f"Failed to fetch filing: {response.status_code}")
+                    return None, None
+                break  # Success, exit retry loop
+            except (SSLError, ConnectionError, Timeout) as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(f"Network error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Failed after {max_retries} attempts: {type(e).__name__}: {str(e)}")
+                    return None, None
+            except RequestException as e:
+                print(f"Request error: {type(e).__name__}: {str(e)}")
+                return None, None
+
         soup = BeautifulSoup(response.content, 'html.parser')
 
         # Extract the reporting date from the filing
@@ -133,15 +203,6 @@ class NPORTPScraper:
 
 
 
-    def save_holdings(self):
-        """ FUNCTION DESCRIPTION:
-        Save all of the extracted holdings to CSV files (each file corresponds to a NPORT-P filing).
-        """
-        for date, df in self.master_df_list.items():
-            filename = f"{date}_NPORT-P_HOLDINGS.csv"
-            print(f"Saving {filename}")
-            df.to_csv(filename, index=False)
-
     def run(self):
         """ FUNCTION DESCRIPTION:
         Main execution flow of the scraper.
@@ -150,13 +211,37 @@ class NPORTPScraper:
         if not data:
             return
         nport_p_filings = self.filter_nport_p_filings(data)
-        for _, row in nport_p_filings.iterrows():
+        total_filings = len(nport_p_filings)
+        print(f"Found {total_filings} NPORT-P filings")
+
+        for idx, row in nport_p_filings.iterrows():
             accession_number = row["Accession Number"]
             primary_document = row["Primary Document"]
+
+            # Skip if already processed
+            if accession_number in self.processed_filings:
+                print(f"Skipping already processed filing: {accession_number}")
+                continue
+
+            print(f"Processing filing {len(self.processed_filings) + 1}/{total_filings}: {accession_number}")
             holdings_df, reporting_date = self.scrape_filing(accession_number, primary_document)
-            if holdings_df is not None:
+            if holdings_df is not None and reporting_date is not None:
                 self.master_df_list[reporting_date] = holdings_df
-        self.save_holdings()
+                # Save this filing immediately
+                filename = f"{reporting_date}_NPORT-P_HOLDINGS.csv"
+                filepath = os.path.join(self.output_dir, filename)
+                print(f"Saving {filepath}")
+                holdings_df.to_csv(filepath, index=False)
+                # Mark as processed
+                self.save_progress(accession_number)
+            else:
+                print(f"Failed to process filing {accession_number}, will retry on next run")
+
+        print("\nProcessing complete!")
+        if len(self.processed_filings) == total_filings:
+            print("All filings have been processed.")
+        else:
+            print(f"Processed {len(self.processed_filings)}/{total_filings} filings. Run again to retry failed filings.")
 
 def main():
     etf_cik = input("Enter the 10-digit CIK number for the ETF: ").strip()
