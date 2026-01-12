@@ -6,6 +6,7 @@ import json
 import os
 import time
 import sys
+import sqlite3
 from requests.exceptions import SSLError, ConnectionError, Timeout, RequestException
 
 class NPORTPScraper:
@@ -202,7 +203,59 @@ class NPORTPScraper:
         holdings_df = pd.DataFrame(holdings_data)
         return holdings_df, reporting_date
 
+    def create_database(self):
+        """ FUNCTION DESCRIPTION:
+        Combine all CSV files into a SQLite database with a reporting_date column.
+        """
+        db_path = os.path.join(self.output_dir, f"holdings.db")
+        print(f"\nCreating SQLite database: {db_path}")
 
+        # Connect to SQLite database
+        conn = sqlite3.connect(db_path)
+
+        # Get all CSV files in the output directory
+        csv_files = [f for f in os.listdir(self.output_dir) if f.endswith('_NPORT-P_HOLDINGS.csv')]
+
+        if not csv_files:
+            print("No CSV files found to add to database.")
+            conn.close()
+            return
+
+        # Sort files by date
+        csv_files.sort()
+
+        all_data = []
+        for csv_file in csv_files:
+            # Extract reporting date from filename (format: YYYY-MM-DD_NPORT-P_HOLDINGS.csv)
+            reporting_date = csv_file.split('_NPORT-P_HOLDINGS.csv')[0]
+            csv_path = os.path.join(self.output_dir, csv_file)
+
+            # Read CSV and add reporting_date column
+            df = pd.read_csv(csv_path)
+            df['Reporting Date'] = reporting_date
+            all_data.append(df)
+
+        # Combine all dataframes
+        combined_df = pd.concat(all_data, ignore_index=True)
+
+        # Reorder columns to put Reporting Date first
+        cols = ['Reporting Date'] + [col for col in combined_df.columns if col != 'Reporting Date']
+        combined_df = combined_df[cols]
+
+        # Write to SQLite database
+        combined_df.to_sql('holdings', conn, if_exists='replace', index=False)
+
+        # Create index on reporting date for faster queries
+        cursor = conn.cursor()
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_reporting_date ON holdings("Reporting Date")')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_issuer ON holdings("Name of Issuer")')
+        conn.commit()
+
+        print(f"Database created successfully with {len(combined_df)} total holdings across {len(csv_files)} reporting periods.")
+        print(f"Table: holdings")
+        print(f"Columns: {', '.join(cols)}")
+
+        conn.close()
 
     def run(self):
         """ FUNCTION DESCRIPTION:
@@ -243,6 +296,9 @@ class NPORTPScraper:
             print("All filings have been processed.")
         else:
             print(f"Processed {len(self.processed_filings)}/{total_filings} filings. Run again to retry failed filings.")
+
+        # Create SQLite database from all CSV files
+        self.create_database()
 
 def main():
     # Check if CIK was provided as command-line argument

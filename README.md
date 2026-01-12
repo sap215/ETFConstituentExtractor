@@ -10,6 +10,7 @@ Using this tool, users can fetch all of the NPORT-P filings (over the past five 
 - **Error Handling & Retry Logic**: Built-in retry mechanism with exponential backoff for network errors and SSL issues
 - **Organized Output**: Creates a structured output directory (`output/{CIK}/`) for each ETF
 - **Command-line & Interactive Modes**: Supports both command-line arguments and interactive input
+- **SQLite Database**: Automatically combines all CSV files into a SQLite database for easy querying and analysis
 
 ## How to Use
 
@@ -47,11 +48,44 @@ When prompted, enter the 10-digit CIK number of the ETF you want to extract hold
 ### Output
 
 The tool will:
+
 1. Fetch all relevant NPORT-P filings for the specified CIK
 2. Extract the holdings data from each filing
 3. Save each filing's data into a separate CSV file named `{YYYY-MM-DD}_NPORT-P_HOLDINGS.csv`
 4. Store all files in the `output/{CIK}/` directory
 5. Track progress in `output/{CIK}/progress.json` for resumability
+6. Automatically combine all CSV files into a SQLite database (`output/{CIK}/holdings.db`)
+
+#### Database Structure
+
+The SQLite database contains a single `holdings` table with the following columns:
+
+- `Reporting Date`: The quarter-end date for the holdings (YYYY-MM-DD format)
+- `Name of Issuer`: The company or security name
+- `Number of Shares`: The number of shares held
+- `Value (USD)`: The market value in US dollars
+- `Percentage of Net Assets`: The percentage of the fund's total net assets
+
+The database includes indexes on `Reporting Date` and `Name of Issuer` for efficient querying.
+
+#### Example SQL Queries
+
+```sql
+-- Get all holdings for a specific quarter
+SELECT * FROM holdings WHERE "Reporting Date" = '2024-08-31';
+
+-- Track a specific company's holdings over time
+SELECT "Reporting Date", "Number of Shares", "Value (USD)", "Percentage of Net Assets"
+FROM holdings
+WHERE "Name of Issuer" = 'Apple Inc'
+ORDER BY "Reporting Date";
+
+-- Get summary statistics by quarter
+SELECT "Reporting Date", COUNT(*) as num_holdings, SUM("Value (USD)") as total_value
+FROM holdings
+GROUP BY "Reporting Date"
+ORDER BY "Reporting Date" DESC;
+```
 
 ### Resuming Interrupted Runs
 
