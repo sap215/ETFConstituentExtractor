@@ -1,4 +1,4 @@
-# Imports
+#!/usr/bin/env python3
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -14,7 +14,7 @@ class NPORTPScraper:
             "Accept-Encoding": "gzip, deflate",
             "Host": "data.sec.gov"
         }
-        
+
         # Headers for individual NPORT-P filings
         self.nportp_headers = {
             "User-Agent": "Sam Pass samalam66@gmail.com", # REPLACE WITH YOUR OWN INFORMATION
@@ -37,7 +37,7 @@ class NPORTPScraper:
             print(f"Failed to fetch submission data: {response.status_code}")
             return None
         return response.json()
-    
+
     def filter_nport_p_filings(self, data):
         """ FUNCTION DESCRIPTION:
         Filter for NPORT-P filings.
@@ -50,7 +50,7 @@ class NPORTPScraper:
             "Primary Document": filings.get("primaryDocument", [])
         })
         return df[df["Form Type"] == "NPORT-P"]
-    
+
     def scrape_filing(self, accession_number, primary_document):
         """ FUNCTION DESCRIPTION:
         Scrape holdings data from an individual NPORT-P filing, given the accession number and primary document URL.
@@ -75,12 +75,12 @@ class NPORTPScraper:
                     if date_section is not None:
                         reporting_date = date_section.find_next_sibling('td').get_text(strip=True)
                         break
-        
+
         # If the reporting date is not found, return None
         if not reporting_date:
             print("Failed to extract reporting date from the filing.")
             return None, None
-        
+
         holdings_data = []
 
         # Extract the investment sections (each section represents a different holding)
@@ -105,7 +105,7 @@ class NPORTPScraper:
                     # cusip = c1_table.find('td', string=lambda text: text and 'd. CUSIP (if any)' in text)
                     # if cusip is not None:
                     #     investment_data["CUSIP"] = cusip.find_next_sibling('td').get_text(strip=True)
-            
+
             # Extract the 'Item C.2. Amount of each investment' table to find the number of shares (balance), value in USD, and percentage of net assets
             c2 = investment.find_next('h4', string=lambda text: text and 'Item C.2. Amount of each investment' in text)
             c2_table = c2.find_next('table')
@@ -130,7 +130,7 @@ class NPORTPScraper:
                 holdings_data.append(investment_data)
         holdings_df = pd.DataFrame(holdings_data)
         return holdings_df, reporting_date
-        
+
 
 
     def save_holdings(self):
