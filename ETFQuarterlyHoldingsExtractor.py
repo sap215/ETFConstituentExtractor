@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import json
 import os
 import time
+import sys
 from requests.exceptions import SSLError, ConnectionError, Timeout, RequestException
 
 class NPORTPScraper:
@@ -244,7 +245,12 @@ class NPORTPScraper:
             print(f"Processed {len(self.processed_filings)}/{total_filings} filings. Run again to retry failed filings.")
 
 def main():
-    etf_cik = input("Enter the 10-digit CIK number for the ETF: ").strip()
+    # Check if CIK was provided as command-line argument
+    if len(sys.argv) > 1:
+        etf_cik = sys.argv[1].strip()
+    else:
+        etf_cik = input("Enter the 10-digit CIK number for the ETF: ").strip()
+
     if not etf_cik.isdigit() or len(etf_cik) != 10:
         print("Invalid CIK number. Please enter a 10-digit numeric CIK.")
         return
